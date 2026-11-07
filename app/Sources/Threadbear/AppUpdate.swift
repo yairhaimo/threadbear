@@ -407,10 +407,9 @@ final class AppUpdater {
     /// if they're new.
     func check() {
         guard let running, build == nil else { return }
-        // followMain: false in runner.json stops the runner rebuilding, and
-        // the app too (on-your-mac.md promises both). Only an explicit false
-        // stops it: before the runner has said, it's the default, on.
-        guard AppModel.shared.runnerSettings?.followMain != false else { return }
+        // Wait for settings before checking for an update. An unavailable
+        // runner must not override a saved followMain: false setting.
+        guard AppModel.shared.runnerSettings?.followMain == true else { return }
         Task { @MainActor in
             let result = await Self.run("/usr/bin/git", AppUpdate.revParseArguments(checkout: running.checkout))
             guard result.status == 0 else {
@@ -443,6 +442,8 @@ final class AppUpdater {
     }
 
     private func startBuild(appTree: String, checkout: String) {
+        // Settings can change while the asynchronous Git check runs.
+        guard AppModel.shared.runnerSettings?.followMain == true else { return }
         guard let script = Bundle.main.url(forResource: "stage-update", withExtension: "sh") else { return }
         let process = Process()
         let (executable, arguments) = Self.buildCommand(script: script.path, checkout: checkout, next: Self.nextDir.path)
