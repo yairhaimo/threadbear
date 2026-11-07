@@ -97,8 +97,7 @@ fi
 # every build.
 SIGN_IDENTITY="${THREADBEAR_SIGN_IDENTITY:-$({
   security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
-    | head -n 1
+    | awk '/"Apple Development:/ { print $2; exit }'
 } || true)}"
 SIGNING_REQUIREMENTS=()
 if [[ -z "$SIGN_IDENTITY" ]]; then
