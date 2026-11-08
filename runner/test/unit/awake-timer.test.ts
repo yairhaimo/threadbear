@@ -35,7 +35,7 @@ test("a stall of the process doesn't use up the time", async () => {
   t.clear();
 });
 
-test('the handshake survives the process stalling past both auth timeouts mid-way', async () => {
+test('the handshake survives the process stalling past both auth timeouts mid-way', async (t) => {
   // A runner and a client in one process, as in the unit tests, on a
   // machine so loaded that node isn't scheduled for longer than either
   // side's auth timeout (restart.test.ts failed this way under a load of
@@ -43,6 +43,10 @@ test('the handshake survives the process stalling past both auth timeouts mid-wa
   const { runner } = makeHarness();
   const server = new RpcServer({ host: '127.0.0.1', port: 0, token: 'tok', runner, log: nullLogger, methods: { ping: () => 'pong' }, authTimeoutMs: 200 });
   const { port } = await server.listen();
+  // Advance a controlled clock at the actual handshake events. A real
+  // 200 ms deadline can expire before those events on a loaded Mac.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 });
+  const now = t.mock.method(performance, 'now', () => Date.now());
   try {
     // Stall at each point of the handshake: as the challenge arrives (both
     // timers running), and just after the client sends its proof (so it's
@@ -51,12 +55,12 @@ test('the handshake survives the process stalling past both auth timeouts mid-wa
     for (const at of ['challenge', 'proof'] as const) {
       const c = new RunnerClient(`ws://127.0.0.1:${port}/rpc`, 'tok', { authTimeoutMs: 200 });
       const ws = (c as any).ws;
-      if (at === 'challenge') ws.prependOnceListener('message', () => stall(400));
+      if (at === 'challenge') ws.prependOnceListener('message', () => t.mock.timers.tick(400));
       else {
         const send = ws.send.bind(ws);
         ws.send = (data: string, ...rest: unknown[]) => {
           send(data, ...rest);
-          if (data.includes('auth.prove')) stall(400);
+          if (data.includes('auth.prove')) t.mock.timers.tick(400);
         };
       }
       const t0 = performance.now(); await c.opened.catch((e) => { throw new Error(at + ' after ' + Math.round(performance.now() - t0) + ': ' + e.message); });
@@ -64,6 +68,8 @@ test('the handshake survives the process stalling past both auth timeouts mid-wa
       c.close();
     }
   } finally {
+    now.mock.restore();
+    t.mock.timers.reset();
     await server.close();
   }
 });

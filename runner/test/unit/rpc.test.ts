@@ -154,10 +154,14 @@ test('an old client\'s bearer header still works; a wrong one is turned away at 
 // one up and answers with a made-up proof.
 async function impostor(mode: 'silent' | 'old' | 'challenge') {
   const seen: string[] = [];
+  let connections = 0;
+  let connected!: () => void;
+  const bothConnected = new Promise<void>((done) => { connected = done; });
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await new Promise<void>((r) => wss.once('listening', () => r()));
   wss.on('connection', (ws, req) => {
     seen.push(JSON.stringify(req.headers));
+    if (++connections === 2) connected();
     if (mode === 'challenge') ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'auth.challenge', params: { version: 1, nonce: 'b'.repeat(64) } }));
     if (mode === 'old') ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'runner.notice', params: { level: 'info', message: 'hi' } }));
     ws.on('message', (d) => {
@@ -171,25 +175,48 @@ async function impostor(mode: 'silent' | 'old' | 'challenge') {
     for (const ws of wss.clients) ws.terminate();
     return new Promise<void>((r) => wss.close(() => r()));
   };
-  return { port, url: `ws://127.0.0.1:${port}/rpc`, seen, close };
+  return { port, url: `ws://127.0.0.1:${port}/rpc`, seen, bothConnected, close };
 }
 
-test('a listener on the runner\'s port never gets the token from tb or deploy, whatever it pretends to be', async () => {
+test('a listener on the runner\'s port never gets the token from tb or deploy, whatever it pretends to be', async (t) => {
   // A path in a variable: rpc-client.mjs has no types.
   const rpcClient = new URL('../../scripts/rpc-client.mjs', import.meta.url).href;
   const { connectRpc } = await import(rpcClient);
   for (const mode of ['silent', 'old', 'challenge'] as const) {
     const imp = await impostor(mode);
+    // Test the handshake, not whether a loaded Mac can connect in 300 ms.
+    // Start the deadline only after both real sockets reached the impostor.
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 });
+    const now = t.mock.method(performance, 'now', () => Date.now());
     const c = new RunnerClient(imp.url, TOKEN, { authTimeoutMs: 300 });
-    await assert.rejects(c.opened, /prove|challenge|isn't the runner/i, mode);
-    await assert.rejects(connectRpc(imp.port, TOKEN, 300), /prove|challenge|isn't the runner/i, mode);
-    for (const for_ of imp.seen) {
-      assert.ok(!for_.includes(TOKEN), `${mode}: the token reached it: ${for_}`);
-      assert.ok(!/"authorization"/i.test(for_), `${mode}: an Authorization header reached it`);
+    try {
+      const rejected = Promise.all([
+        assert.rejects(c.opened, /prove|challenge|isn't the runner/i, mode),
+        assert.rejects(connectRpc(imp.port, TOKEN, 300), /prove|challenge|isn't the runner/i, mode),
+      ]);
+      rejected.catch(() => {}); // checked below, after the sockets arrive
+      await imp.bothConnected;
+      if (mode === 'silent') {
+        // Let the upgrade reach the clients, then count awakeTimeout's four
+        // 75 ms ticks. Real socket events still run between clock ticks.
+        await new Promise((done) => setImmediate(done));
+        for (let i = 0; i < 4; i++) {
+          t.mock.timers.tick(75);
+          await new Promise((done) => setImmediate(done));
+        }
+      }
+      await rejected;
+      for (const for_ of imp.seen) {
+        assert.ok(!for_.includes(TOKEN), `${mode}: the token reached it: ${for_}`);
+        assert.ok(!/"authorization"/i.test(for_), `${mode}: an Authorization header reached it`);
+      }
+      assert.ok(imp.seen.length >= 2, `${mode}: both clients reached it`);
+    } finally {
+      now.mock.restore();
+      t.mock.timers.reset();
+      (c as any).ws.terminate();
+      await imp.close();
     }
-    assert.ok(imp.seen.length >= 2, `${mode}: both clients reached it`);
-    (c as any).ws.terminate();
-    await imp.close();
   }
 });
 
