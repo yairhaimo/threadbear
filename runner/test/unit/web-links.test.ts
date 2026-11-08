@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { escapeDestinations, findStep, readLink } from '../../../web/src/thread-links.ts';
+import { escapeDestinations, findStep, readLink, SCAN_BUDGET } from '../../../web/src/thread-links.ts';
 
 test('escapes the destinations agents write, so they parse as links', () => {
   // The same text Mike saw raw on the phone, 1 Nov; the website had it too.
@@ -119,19 +119,28 @@ test('one long line of unclosed work links is read in one pass', () => {
   assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
 });
 
-test('a page full of long rows and links has a bounded cost', () => {
+test('a page full of long rows and links has a bounded cost', (t) => {
   // The worst a page of 80 rows can be: 40 rows of the 8,000 characters the
   // mirror keeps that every search reads to the end, then 40 messages of as
   // many different links as fit.
   const page: { seq: number; role: 'user' | 'assistant' | 'tool'; text: string }[] = [{ seq: 0, role: 'user', text: 'Go' }];
   for (let i = 1; i <= 40; i++) page.push({ seq: i, role: 'tool', text: 'z '.repeat(4000) });
   for (let i = 41; i <= 80; i++) page.push({ seq: i, role: 'assistant', text: '' });
-  let found = 0;
-  const ms = cpuMs(() => {
-    for (let m = 41; m <= 80; m++) for (let l = 0; l < 700; l++) if (findStep(`z q${m}-${l}`, m, page) !== undefined) found++;
+  // Measure the work, not this Mac's speed or background CPU scheduling.
+  // Fail as soon as the cap is crossed, even if a regression removes it.
+  let scanned = 0;
+  const includes = String.prototype.includes;
+  t.mock.method(String.prototype, 'includes', function (this: string, query: string, position?: number) {
+    if (query.startsWith('z q')) {
+      scanned += this.length;
+      assert.ok(scanned <= SCAN_BUDGET, `searched ${scanned} characters`);
+    }
+    return includes.call(this, query, position);
   });
+  let found = 0;
+  for (let m = 41; m <= 80; m++) for (let l = 0; l < 700; l++) if (findStep(`z q${m}-${l}`, m, page) !== undefined) found++;
   assert.equal(found, 0);
-  assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
+  assert.ok(scanned > 0, 'the page was searched');
   // Links that do find their step still do, on a fresh page.
   assert.equal(findStep('Run the tests', 9, [...rows]), 5);
 });

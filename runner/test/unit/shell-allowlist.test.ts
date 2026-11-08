@@ -624,6 +624,26 @@ test("Muse's review: where a hook's script is, and what node_modules/.bin/convex
   assert.match(liveCommandProblem('./tools/x.png', repo, files, blocked) ?? '', /x\.png, which patch trust didn't hash/);
 });
 
+test('invalid git and gh arguments are refused before starting git', () => {
+  const dir = ownTmp();
+  const marker = path.join(dir, 'git-ran');
+  fs.writeFileSync(path.join(dir, 'git'), `#!/bin/sh\n: > '${marker}'\nexit 1\n`, { mode: 0o755 });
+  const saved = process.env.PATH;
+  process.env.PATH = dir;
+  try {
+    refusedLive(dir, [
+      ['s=$(cat /dev/null); git rev-list --count "$s"', /runs git with `\$s`/],
+      ['git status', /`git status`/],
+      ['git rev-list --count --bad-option HEAD', /`git rev-list --bad-option`/],
+      ['gh pr view 1', /`gh pr view`/],
+    ]);
+    assert.equal(fs.existsSync(marker), false, 'invalid words need no git config subprocess');
+  } finally {
+    if (saved === undefined) delete process.env.PATH;
+    else process.env.PATH = saved;
+  }
+});
+
 test('R4: every word of a listed program is literal, but for a pattern that starts with literal text; find runs, deletes and writes nothing', () => {
   const { repo } = mikesRepo();
   refusedLive(repo, [
@@ -825,16 +845,25 @@ test("R5: a repo's filter drivers don't run: its own are refused, and your own d
   git(repo, 'add', 'a.txt', '.gitattributes');
   git(repo, 'commit', '-qm', 'two');
   fs.rmSync(marker, { force: true });
-  fs.appendFileSync(path.join(repo, 'a.txt'), 'two\n');
+  // A different size lets git status report a change from stat alone.
+  // Keep the size, but change the mtime so git must read through the filter.
+  const file = path.join(repo, 'a.txt');
+  const changed = new Date(fs.statSync(file).mtimeMs + 2000);
+  fs.writeFileSync(file, 'two\n');
+  fs.utimesSync(file, changed, changed);
   const env: Record<string, string | undefined> = { ...process.env, GIT_CONFIG_GLOBAL: global };
   const e = { ...env, ...liveCommandEnv(env) } as NodeJS.ProcessEnv;
   for (const cmd of ['git merge-base --is-ancestor HEAD HEAD', 'git rev-list --count HEAD', "git branch -a --no-merged HEAD --format='%(refname:short)'"]) {
     assert.equal(live(repo, cmd).problem, undefined, cmd);
-    spawnSync('/bin/sh', ['-c', cmd], { cwd: repo, env: e, timeout: 20_000 });
+    const r = spawnSync('/bin/sh', ['-c', cmd], { cwd: repo, env: e, timeout: 20_000 });
+    assert.ifError(r.error);
+    assert.equal(r.status, 0, r.stderr.toString());
     assert.equal(fs.existsSync(marker), false, cmd);
   }
   // (The same global filter does run for git status, which isn't on the list.)
-  spawnSync('/bin/sh', ['-c', 'git status --porcelain'], { cwd: repo, env: e, timeout: 20_000 });
+  const r = spawnSync('/bin/sh', ['-c', 'git status --porcelain'], { cwd: repo, env: e, timeout: 20_000 });
+  assert.ifError(r.error);
+  assert.equal(r.status, 0, r.stderr.toString());
   assert.equal(fs.existsSync(marker), true, 'the test plays it right');
 });
 

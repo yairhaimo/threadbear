@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CodexApprovals,
@@ -20,6 +20,15 @@ import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { QuestionAnswer, QuestionRequest, ToolApprovalAnswer, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { CommandExecutionRequestApprovalParams } from '../../src/adapters/codex/types.ts';
+
+// These cases require the system's programs. A user's PATH can contain
+// wrappers or literal ~/ entries, which production correctly refuses.
+const inheritedPath = process.env.PATH;
+beforeEach(() => { process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin'; });
+afterEach(() => {
+  if (inheritedPath === undefined) delete process.env.PATH;
+  else process.env.PATH = inheritedPath;
+});
 
 // ---- Parsing commands
 
@@ -542,8 +551,11 @@ test('a rule goes by the file a name really runs: the system\'s own, read each t
     process.env.PATH = `${dir}:${saved}`;
     assert.equal(ruleFor(req('grep x f'), CWD), null, 'one found first on PATH');
     assert.equal(commandAllowed(req('grep x f'), [rule], CWD), false, 'a saved rule stops matching');
-    process.env.PATH = `.:${saved}`;
-    assert.equal(ruleFor(req('grep x f'), CWD), null, 'a relative PATH entry: depends on the folder');
+    for (const relative of ['.', '~/bin', '']) {
+      process.env.PATH = `${relative}:${saved}`;
+      assert.equal(ruleFor(req('grep x f'), CWD), null, 'a relative PATH entry: depends on the folder');
+      assert.equal(commandAllowed(req('grep x f'), [rule], CWD), false);
+    }
     process.env.PATH = saved;
     // A path outside the system's folders, link or not.
     const link = path.join(dir, 'ls');

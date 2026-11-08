@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
+import { createConnection } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -118,17 +119,28 @@ test('npm run serve only listens on this Mac', async (t) => {
   const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(free) };
   delete env.HOST;
   const serve = spawn(process.execPath, [script], { env, stdio: 'pipe' });
-  t.after(() => serve.kill());
+  t.after(() => { serve.kill('SIGCONT'); serve.kill(); });
   await new Promise<void>((done, fail) => {
     serve.stdout.once('data', () => done());
     serve.once('exit', (code) => fail(new Error(`serve.mjs exited with ${code}`)));
   });
+  // Reproduce a child that gets no CPU. Its listening socket must still
+  // accept loopback connections and refuse other interfaces.
+  serve.kill('SIGSTOP');
   const reach = (host: string) =>
-    new Promise<boolean>((done) => {
-      const req = request({ host, port: free, path: '/', timeout: 500 }, (res) => (res.resume(), done(true)));
-      req.on('error', () => done(false));
-      req.on('timeout', () => (req.destroy(), done(false)));
-      req.end();
+    new Promise<boolean>((done, fail) => {
+      // Binding is a TCP property. Do not wait for the child to serve HTTP
+      // within 500 ms while the updater runs at background priority.
+      const socket = createConnection({ host, port: free });
+      socket.setTimeout(10_000);
+      socket.once('connect', () => { socket.destroy(); done(true); });
+      socket.once('error', (error: NodeJS.ErrnoException) => {
+        socket.destroy();
+        if (error.code === 'ECONNREFUSED') done(false);
+        else fail(error);
+      });
+      // A timeout does not prove the interface is closed.
+      socket.once('timeout', () => { socket.destroy(); fail(new Error(`connection to ${host} timed out`)); });
     });
   assert.equal(await reach('127.0.0.1'), true);
   for (const address of others) assert.equal(await reach(address), false, address);

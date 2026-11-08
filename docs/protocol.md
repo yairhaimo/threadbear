@@ -3522,6 +3522,8 @@ patches run something else adds it to the list there. On the list:
 **A live command** runs only what Mike's patches run (as of 7 Nov), each
 in the forms they use, and every word literal: known as it's checked, not
 split. There is no fallback for other installed programs.
+Invalid `git` and `gh` arguments are refused before starting git to read
+the repo's config. Valid arguments still require that config check.
 
 | Program | Forms |
 |---|---|

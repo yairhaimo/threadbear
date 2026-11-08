@@ -1177,12 +1177,14 @@ class Allow {
     if (name === 'node') return this.liveNode(args, ctx, line);
     if (name === 'npx') return this.npx(args, ctx, line);
     if (name === 'git' || name === 'gh') {
-      this.gitReady(name, ctx, line);
       const vals = this.known(args, ctx, line, name);
       const sub = name === 'git' ? (vals[0] ?? '') : vals.slice(0, 2).join(' ');
       const specs = name === 'git' ? GIT : GH;
       if (!Object.hasOwn(specs, sub)) this.refuse(ctx, line, `runs \`${name} ${sub}\`, which isn't one of the ${name} commands on the short list (${Object.keys(specs).join(', ')}, with nothing before them), ${OFF}.`);
       this.spec(`${name} ${sub}`, args.slice(sub.split(' ').length), ctx, line, specs[sub]!);
+      // Reject invalid words without a subprocess: under load a config
+      // read can time out before we report the command's actual problem.
+      this.gitReady(name, ctx, line);
       this.other(name, ctx);
       return;
     }
