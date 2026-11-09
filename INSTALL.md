@@ -151,13 +151,15 @@ runner, like a second Mac: its threads show in the Mac app's sidebar and on
 the phone, and the composer's machine chip starts threads there. It runs the
 runner only, no app. Ubuntu 24.04 on x86_64 is what's been tried, on a
 Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
+Normal thread control uses Convex; steps 4 and 8 are only for direct access.
 
 1. **Packages:** `sudo apt-get install -y git build-essential imagemagick
-   librsvg2-bin bubblewrap jq lsof` (ImageMagick and rsvg-convert stand in for
+   librsvg2-bin bubblewrap jq lsof rsync` (ImageMagick and rsvg-convert stand in for
    macOS's sips and Quick Look when pictures are converted, rsvg-convert
    alone drawing SVGs; Codex's sandbox
    wants bubblewrap; lsof checks who's on the other end of a handover's
-   socket, and minimal images leave it out). zsh isn't needed: patch
+   socket, and minimal images leave it out; rsync is needed by the installation
+   checks). zsh isn't needed: patch
    commands run in the account's own shell, else bash. Set the account's full name, which agents are told:
    `sudo chfn -f "Their Name" $USER`. And a git identity, as on any machine
    that commits: `git config --global user.name` and `user.email`.
@@ -169,24 +171,25 @@ Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
    `claude auth login`; Codex with `npm i -g @openai/codex`, then
    `codex login --device-auth`. Both print a link for them to open in their
    own browser. Never copy credentials over from the Mac.
-4. **Tailscale:** install it and `sudo tailscale up --hostname=<name>`, and
+4. **Tailscale (optional):** install it and `sudo tailscale up --hostname=<name>`, and
    **Ask** them to open the link it prints. Once it's on their tailnet, close
    the server's public SSH port in the cloud's firewall and use the tailnet
    name instead.
 5. **The code:** clone their fork to `~/dev/me/threadbear` (any folder
    works) and, in `runner/`, `npm ci`.
-6. **Join their backend:** copy `secrets/convex-key` from the Mac's data
-   folder to the same place here (`~/Library/Application Support/Threadbear`;
-   the folders keep their macOS names on Linux, so every path in these docs
-   is the same) with `scp`, never by printing it, and `chmod 600` it. Then
-   write `runner.json` there: `port` 8797, and `sync` with `url` (the Mac's
-   `sync.url`), `name` (what the sidebar calls this machine) and `rpcUrl`
-   (`wss://<tailnet name>:8798/rpc`).
+6. **Join their backend:** make `~/Library/Application Support/Threadbear`
+   here (the folders keep their macOS names on Linux). Write `runner.json`
+   there: `port` 8797, `defaults.cwd` (the work folder, which must exist), and
+   `sync.name` (what the sidebar calls this machine). Then, on the first Mac,
+   run `tb runner add <name> --ssh <user@server>`. It writes the backend URL,
+   a runner id and a separate runner key to this server. Never copy the Mac's
+   main key or deploy key. Add `sync.rpcUrl` (`wss://<tailnet name>:8798/rpc`)
+   only when setting up the direct Tailscale connection in step 8.
 7. **Install:** `runner/scripts/install-runner.sh`. On Linux it writes a
    systemd user service, `~/.config/systemd/user/com.mikerosoft.threadbear.runner.service`,
    in place of the LaunchAgent. Turn on lingering once, or it stops when
    nobody is logged in: `sudo loginctl enable-linger $USER`.
-8. **Reach it from the Mac:** `sudo tailscale serve --bg --https=8798
+8. **Direct access from the Mac (optional):** `sudo tailscale serve --bg --https=8798
    http://127.0.0.1:8797` here, then `tb pair` here prints the two files to
    copy to the Mac.
 9. **Updates:** the runner follows its checkout's `main` like the Mac's
