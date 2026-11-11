@@ -171,6 +171,8 @@ export class TokenTally {
     const seenRoots = new Set<string>();
     const seenFiles = new Set<string>();
     for (const account of this.accounts()) {
+      // The ACP agents keep no transcripts in a form this can read.
+      if (account.provider !== 'claude' && account.provider !== 'codex') continue;
       const roots =
         account.provider === 'codex'
           ? [path.join(account.configDir, 'sessions'), path.join(account.configDir, 'archived_sessions')]

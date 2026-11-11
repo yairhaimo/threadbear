@@ -7,10 +7,10 @@ import { RpcServer } from '../../src/rpc.ts';
 import { nullLogger } from '../../src/log.ts';
 import { makeHarness } from '../helpers/fakes.ts';
 
-// Blocks the event loop the way a starved process stalls.
+// Blocks the event loop the way a starved process stalls. Asleep rather
+// than spinning, so it doesn't add to the load of a busy check host.
 function stall(ms: number) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {}
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 test('fires after the time, and clear() stops it', async () => {
@@ -40,11 +40,14 @@ test('the handshake survives the process stalling past both auth timeouts mid-wa
   // machine so loaded that node isn't scheduled for longer than either
   // side's auth timeout (restart.test.ts failed this way under a load of
   // 60+, 6 Nov). The replies are in the sockets when it wakes.
+  // Each simulated stall is twice the authentication timeout.
+  const authMs = 1000;
+  const stallMs = 2 * authMs;
   const { runner } = makeHarness();
-  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: 'tok', runner, log: nullLogger, methods: { ping: () => 'pong' }, authTimeoutMs: 200 });
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: 'tok', runner, log: nullLogger, methods: { ping: () => 'pong' }, authTimeoutMs: authMs });
   const { port } = await server.listen();
   // Advance a controlled clock at the actual handshake events. A real
-  // 200 ms deadline can expire before those events on a loaded Mac.
+  // deadline can expire before those events on a loaded Mac.
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 });
   const now = t.mock.method(performance, 'now', () => Date.now());
   try {
@@ -53,14 +56,14 @@ test('the handshake survives the process stalling past both auth timeouts mid-wa
     // queued in the server's socket, and the server's in the client's
     // once the server answers on waking).
     for (const at of ['challenge', 'proof'] as const) {
-      const c = new RunnerClient(`ws://127.0.0.1:${port}/rpc`, 'tok', { authTimeoutMs: 200 });
+      const c = new RunnerClient(`ws://127.0.0.1:${port}/rpc`, 'tok', { authTimeoutMs: authMs });
       const ws = (c as any).ws;
-      if (at === 'challenge') ws.prependOnceListener('message', () => t.mock.timers.tick(400));
+      if (at === 'challenge') ws.prependOnceListener('message', () => t.mock.timers.tick(stallMs));
       else {
         const send = ws.send.bind(ws);
         ws.send = (data: string, ...rest: unknown[]) => {
           send(data, ...rest);
-          if (data.includes('auth.prove')) t.mock.timers.tick(400);
+          if (data.includes('auth.prove')) t.mock.timers.tick(stallMs);
         };
       }
       const t0 = performance.now(); await c.opened.catch((e) => { throw new Error(at + ' after ' + Math.round(performance.now() - t0) + ': ' + e.message); });

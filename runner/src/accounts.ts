@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { acpAccounts } from './adapters/acp/agents.ts';
+import { experimentOn } from './experiments.ts';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
 import type { UsageStore } from './usage.ts';
@@ -84,7 +86,7 @@ export function isCodexLogin(dir: string): boolean {
 }
 
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'accountNotes' | 'accountsDir'>>;
+  Partial<Pick<Config, 'codexMainDir' | 'accountNotes' | 'accountsDir' | 'home' | 'cursorPath' | 'opencodePath'>>;
 
 // claude-main is ~/.claude (its .claude.json sits at ~/.claude.json);
 // codex-main is ~/.codex. Token Stats' Accounts folder holds claude-N and
@@ -120,6 +122,9 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   const codex = cfg.codexMainDir ? [{ id: 'codex-main', dir: cfg.codexMainDir }] : [];
   for (const { id, dir } of [...codex, ...numbered('codex')]) {
     if (isCodexLogin(dir)) out.push(codexAccount(id, dir));
+  }
+  if (cfg.home && experimentOn(cfg.home, 'acpAgents')) {
+    out.push(...acpAccounts({ paths: { cursor: cfg.cursorPath, opencode: cfg.opencodePath } }));
   }
   for (const a of out) {
     const note = cfg.accountNotes?.[a.id];
@@ -232,7 +237,7 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : (out.email ?? out.id);
+    out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;
