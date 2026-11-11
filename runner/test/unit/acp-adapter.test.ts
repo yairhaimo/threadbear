@@ -1,6 +1,6 @@
 // AcpAdapter against a pretend agent (helpers/fake-acp-agent.mjs) that
 // behaves as OpenCode was seen to: it runs tools unasked unless told otherwise.
-import { test, afterEach } from 'node:test';
+import { test, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -19,6 +19,16 @@ import { ProcessRegistry } from '../../src/proc.ts';
 import { z } from 'zod';
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
+
+// The command rules need the system's programs, as in codex-approvals.test.ts:
+// a user's PATH can hold wrappers or literal ~/ entries, which production
+// rightly refuses. Node's own folder comes last, for the fake agent's shebang.
+const inheritedPath = process.env.PATH;
+beforeEach(() => { process.env.PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${path.dirname(process.execPath)}`; });
+afterEach(() => {
+  if (inheritedPath === undefined) delete process.env.PATH;
+  else process.env.PATH = inheritedPath;
+});
 
 // Real folders on the temp volume, as adapters compare and resolve them.
 function tmp(): string {
