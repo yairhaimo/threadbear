@@ -97,8 +97,12 @@ import Testing
         }
         var h = MessageHistory()
         let pages = (0...1250).map { big((1 + $0 * 8)...(80 + $0 * 8)) }
-        let clock = ContinuousClock()
-        let took = clock.measure { for p in pages { h.takeLive(p) } }
+        // CPU time, not the clock, as the app's cpuSeconds does: tb land's
+        // check runs this at background priority beside the suite's other
+        // tests, and the clock's 4 s there was mostly waiting for a core.
+        let started = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        for p in pages { h.takeLive(p) }
+        let took = Duration.nanoseconds(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - started)
         let bytes = h.older.reduce(0) { $0 + MessageHistory.bytes(of: $1) }
         #expect(bytes <= MessageHistory.olderMaxBytes)
         #expect(h.older.count < 1100)
